@@ -8,14 +8,14 @@ enum CpuError{
 }
 
 enum Status{
-    C,
-    Z,
-    I,
-    D,
+    C,  // Carry
+    Z,  // Zero
+    I,  // Interrupt Disable
+    D,  // Decimal
     B,
 
-    V,
-    N,
+    V,  // Overflow
+    N,  // Negative
 }
 impl Status{
     fn mask(&self) -> u8{
@@ -38,7 +38,7 @@ impl Status{
     Datasheet: https://www.westerndesigncenter.com/wdc/documentation/w65c02s.pdf
  */
 struct W65C02S{
-    program_counter: Wrapping<u16>,
+    program_counter: u16,
     a_register: u8,
     y_register: u8,
     x_register: u8,
@@ -316,8 +316,8 @@ impl W65C02S{
     //#GROUP: artery functions
     #[inline]
     fn fetch_u8(&mut self, bus: &mut dyn Bus) -> u8{
-        let val = bus.read(self.program_counter.0);
-        self.program_counter += 1;
+        let val = bus.read(self.program_counter);
+        self.program_counter.wrapping_add(1);
         val
     }
     #[inline]
@@ -329,59 +329,31 @@ impl W65C02S{
 
     pub fn step(&mut self, bus: &mut dyn Bus) -> Result<(), CpuError>{
         let opcode = self.fetch_u8(bus);
-        let operation = Self::OPERATIONS[opcode as usize].ok_or(CpuError::InvalidOpcode(opcode))?;
+        //let operation = Self::OPERATIONS[opcode as usize].ok_or(CpuError::InvalidOpcode(opcode))?;
 
-        let operand = resolve_operand(&mut self, bus, operation.addressing_mode);
+        //let operand = resolve_operand(self, bus, operation.addressing_mode);
 
         Ok(())
     }
 
     //#GROUP: processor status register helpers
+    #[inline]
     fn status_set(&mut self, flag: Status, val: bool){
         let mask = flag.mask();
         self.processor_status_register = (self.processor_status_register & !mask) | (mask * val as u8);
     }
+    #[inline]
     fn status_check(&mut self, flag: Status) -> bool{
         self.processor_status_register & flag.mask() > 0
+    }
+    #[inline]
+    fn status_update_zn(&mut self, val: u8){
+        self.status_set(Status::Z, val == 0);
+        self.status_set(Status::N, (val & 0b1000_0000) > 0);
     }
 
     fn set_p_default(&mut self){
         self.processor_status_register = 0x34; // 0b00110100
-    }
-    #[inline]
-    fn set_p_negative_flag(&mut self, val: bool){
-        let u8_val: u8 = (val as u8) << 7;
-        self.processor_status_register = (self.processor_status_register & !(0x1 << 7)) | u8_val;
-    }
-    #[inline]
-    fn set_p_overflow_flag(&mut self, val: bool){
-        let u8_val: u8 = (val as u8) << 6;
-        self.processor_status_register = (self.processor_status_register & !(0x1 << 6)) | u8_val;
-    }
-    #[inline]
-    fn set_p_break_flag(&mut self, val: bool){
-        let u8_val: u8 = (val as u8) << 4;
-        self.processor_status_register = (self.processor_status_register & !(0x1 << 4)) | u8_val;
-    }
-    #[inline]
-    fn set_p_decimal_flag(&mut self, val: bool){
-        let u8_val: u8 = (val as u8) << 3;
-        self.processor_status_register = (self.processor_status_register & !(0x1 << 3)) | u8_val;
-    }
-    #[inline]
-    fn set_p_irq_disable_flag(&mut self, val: bool){
-        let u8_val: u8 = (val as u8) << 2;
-        self.processor_status_register = (self.processor_status_register & !(0x1 << 2)) | u8_val;
-    }
-    #[inline]
-    fn set_p_zero_flag(&mut self, val: bool){
-        let u8_val: u8 = (val as u8) << 1;
-        self.processor_status_register = (self.processor_status_register & !(0x1 << 1)) | u8_val;
-    }
-    #[inline]
-    fn set_p_carry_flag(&mut self, val: bool){
-        let u8_val: u8 = val as u8;
-        self.processor_status_register = (self.processor_status_register & !(0x1)) | u8_val;
     }
 }
 
@@ -389,178 +361,315 @@ impl W65C02S{
 fn op_adc(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
     let val = r.operand.read(cpu, bus)?;
     let sum = cpu.a_register as u16 + val as u16 + cpu.status_check(Status::C) as u16;
+    let result = sum as u8;
 
     cpu.status_set(Status::C, sum > 0xFF);
+
+    let overflow = ((!(cpu.a_register ^ val) & (cpu.a_register ^ result)) & 0x80) != 0;
+
+    cpu.status_set(Status::V, overflow);
+    cpu.status_update_zn(result);
+
+    cpu.a_register = result;
 
     Ok(())
 }
 fn op_and(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let val = r.operand.read(cpu, bus)?;
+    let result = cpu.a_register & val;
 
+    cpu.status_update_zn(result);
+
+    cpu.a_register = result;
 
     Ok(())
 }
 fn op_asl(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let val = r.operand.read(cpu, bus)?;
+    let result = val << 1;
 
+    cpu.status_set(Status::C, (val & 0b1000_0000) > 0);
+    cpu.status_update_zn(result);
 
     Ok(())
 }
 fn op_bbrn(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand, n: u8) -> Result<(), CpuError>{
-
+    todo!();
 
     Ok(())
 }
 fn op_bbsn(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand, n: u8) -> Result<(), CpuError>{
-
+    todo!();
 
     Ok(())
 }
 fn op_bcc(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Relative(offset) => { 
+            if !cpu.status_check(Status::C){
+                cpu.program_counter.wrapping_add_signed(offset as i16).wrapping_add(2);
+            }
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand)),
+    }
 }
 fn op_bcs(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Relative(offset) => { 
+            if cpu.status_check(Status::C){
+                cpu.program_counter.wrapping_add_signed(offset as i16).wrapping_add(2);
+            }
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand)),
+    }
 }
 fn op_beq(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Relative(offset) => { 
+            if cpu.status_check(Status::Z){
+                cpu.program_counter.wrapping_add_signed(offset as i16).wrapping_add(2);
+            }
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand)),
+    }
 }
 fn op_bit(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let val = r.operand.read(cpu, bus)?;
+    let result = cpu.a_register & val;
 
+    cpu.status_update_zn(result);
+    cpu.status_set(Status::V, (val & 0b0100_0000) > 0);
 
     Ok(())
 }
 fn op_bmi(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Relative(offset) => { 
+            if cpu.status_check(Status::N){
+                cpu.program_counter.wrapping_add_signed(offset as i16).wrapping_add(2);
+            }
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand)),
+    }
 }
 fn op_bne(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Relative(offset) => { 
+            if !cpu.status_check(Status::Z){
+                cpu.program_counter.wrapping_add_signed(offset as i16).wrapping_add(2);
+            }
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand)),
+    }
 }
 fn op_bpl(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Relative(offset) => { 
+            if !cpu.status_check(Status::N){
+                cpu.program_counter.wrapping_add_signed(offset as i16).wrapping_add(2);
+            }
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand)),
+    }
 }
 fn op_bra(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Relative(offset) => {
+            cpu.program_counter.wrapping_add_signed(offset as i16).wrapping_add(2);
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand)),
+    }
 }
 fn op_brk(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
-
+    todo!();
 
     Ok(())
 }
 fn op_bvc(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Relative(offset) => { 
+            if cpu.status_check(Status::V){
+                cpu.program_counter.wrapping_add_signed(offset as i16).wrapping_add(2);
+            }
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand)),
+    }
 }
 fn op_bvs(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Relative(offset) => { 
+            if !cpu.status_check(Status::V){
+                cpu.program_counter.wrapping_add_signed(offset as i16).wrapping_add(2);
+            }
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand)),
+    }
 }
 fn op_clc(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
-
+    cpu.status_set(Status::C, false);
 
     Ok(())
 }
 fn op_cld(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
-
+    cpu.status_set(Status::D, false);
 
     Ok(())
 }
 fn op_cli(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
-
+    cpu.status_set(Status::I, false);
 
     Ok(())
 }
 fn op_clv(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
-
+    cpu.status_set(Status::V, false);
 
     Ok(())
 }
 fn op_cmp(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let val = r.operand.read(cpu, bus)?;
+    let result = cpu.a_register.wrapping_sub(val);
 
+    cpu.status_set(Status::C, cpu.a_register >= val);
+    cpu.status_update_zn(result);
 
     Ok(())
 }
 fn op_cpx(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let val = r.operand.read(cpu, bus)?;
+    let result = cpu.x_register.wrapping_sub(val);
 
+    cpu.status_set(Status::C, cpu.x_register >= val);
+    cpu.status_update_zn(result);
 
     Ok(())
 }
 fn op_cpy(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let val = r.operand.read(cpu, bus)?;
+    let result = cpu.y_register.wrapping_sub(val);
 
+    cpu.status_set(Status::C, cpu.y_register >= val);
+    cpu.status_update_zn(result);
 
     Ok(())
 }
 fn op_dec(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let val = r.operand.read(cpu, bus)?;
+    let result = val.wrapping_sub(1);
 
+    cpu.status_update_zn(result);
+
+    r.operand.write(cpu, bus, result)?;
 
     Ok(())
 }
 fn op_dex(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let result = cpu.x_register.wrapping_sub(1);
 
+    cpu.status_update_zn(result);
+
+    cpu.x_register = result;
 
     Ok(())
 }
 fn op_dey(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let result = cpu.y_register.wrapping_sub(1);
 
+    cpu.status_update_zn(result);
+
+    cpu.y_register = result;
 
     Ok(())
 }
 fn op_eor(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let val = r.operand.read(cpu, bus)?;
+    let result = cpu.a_register ^ val;
 
+    cpu.status_update_zn(result);
+
+    cpu.a_register = result;
 
     Ok(())
 }
 fn op_inc(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let val = r.operand.read(cpu, bus)?;
+    let result = val.wrapping_add(1);
 
+    cpu.status_update_zn(result);
+
+    r.operand.write(cpu, bus, result)?;
 
     Ok(())
 }
 fn op_inx(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let result = cpu.x_register.wrapping_add(1);
+    
+    cpu.status_update_zn(result);
 
+    cpu.x_register = result;
 
     Ok(())
 }
 fn op_iny(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    let result = cpu.y_register.wrapping_add(1);
+    
+    cpu.status_update_zn(result);
 
+    cpu.y_register = result;
 
     Ok(())
 }
 fn op_jmp(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    match r.operand{
+        Operand::Address(addr) => {
+            let target = read_u16(bus, addr);
+            cpu.program_counter = target;
 
-
-    Ok(())
+            Ok(())
+        },
+        _ => Err(CpuError::InvalidOperand(r.operand))
+    }
 }
 fn op_jsr(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
-
+    todo!();
 
     Ok(())
 }
 fn op_lda(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    cpu.a_register = r.operand.read(cpu, bus)?;
 
+    cpu.status_update_zn(cpu.a_register);
 
     Ok(())
 }
 fn op_ldx(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    cpu.x_register = r.operand.read(cpu, bus)?;
 
+    cpu.status_update_zn(cpu.x_register);
 
     Ok(())
 }
 fn op_ldy(cpu: &mut W65C02S, bus: &mut dyn Bus, r: ResolvedOperand) -> Result<(), CpuError>{
+    cpu.y_register = r.operand.read(cpu, bus)?;
 
+    cpu.status_update_zn(cpu.y_register);
 
     Ok(())
 }
@@ -760,20 +869,20 @@ fn resolve_operand(cpu: &mut W65C02S, bus: &mut dyn Bus, mode: AddressingMode) -
         },
         AddressingMode::AbsoluteIndexedIndirect => {
             let base = cpu.fetch_u16(bus);
-            let addr = base.wrapping_add(cpu.x_register.0 as u16);
+            let addr = base.wrapping_add(cpu.x_register as u16);
 
             let target = read_u16(bus, addr);
             ResolvedOperand{ operand: Operand::Address(target), page_crossed: false}
         },
         AddressingMode::AbsoluteIndexedX => {
             let base = cpu.fetch_u16(bus);
-            let addr = base.wrapping_add(cpu.x_register.0 as u16);
+            let addr = base.wrapping_add(cpu.x_register as u16);
 
             ResolvedOperand { operand: Operand::Address(addr), page_crossed: crosses_pages(base, addr) }
         },
         AddressingMode::AbsoluteIndexedY => {
             let base = cpu.fetch_u16(bus);
-            let addr = base.wrapping_add(cpu.y_register.0 as u16);
+            let addr = base.wrapping_add(cpu.y_register as u16);
 
             ResolvedOperand { operand: Operand::Address(addr), page_crossed: crosses_pages(base, addr) }
         },
@@ -808,7 +917,7 @@ fn resolve_operand(cpu: &mut W65C02S, bus: &mut dyn Bus, mode: AddressingMode) -
             ResolvedOperand { operand: Operand::Address(addr), page_crossed: false }
         },
         AddressingMode::ZeroPageIndexedIndirect => {
-            let zp_addr = cpu.fetch_u8(bus).wrapping_add(cpu.x_register.0);
+            let zp_addr = cpu.fetch_u8(bus).wrapping_add(cpu.x_register);
             let low = bus.read(zp_addr as u16) as u16;
             let high = bus.read((zp_addr.wrapping_add(1)) as u16) as u16;
 
@@ -816,12 +925,12 @@ fn resolve_operand(cpu: &mut W65C02S, bus: &mut dyn Bus, mode: AddressingMode) -
             ResolvedOperand { operand: Operand::Address(target), page_crossed: false }
         },
         AddressingMode::ZeroPageIndexedX => {
-            let zp_addr = cpu.fetch_u8(bus).wrapping_add(cpu.x_register.0);
+            let zp_addr = cpu.fetch_u8(bus).wrapping_add(cpu.x_register);
 
             ResolvedOperand { operand: Operand::Address(zp_addr as u16), page_crossed: false }
         },
         AddressingMode::ZeroPageIndexedY => {
-            let zp_addr = cpu.fetch_u8(bus).wrapping_add(cpu.y_register.0);
+            let zp_addr = cpu.fetch_u8(bus).wrapping_add(cpu.y_register);
 
             ResolvedOperand { operand: Operand::Address(zp_addr as u16), page_crossed: false }
         },
@@ -838,7 +947,7 @@ fn resolve_operand(cpu: &mut W65C02S, bus: &mut dyn Bus, mode: AddressingMode) -
             let low = bus.read(zp_addr as u16) as u16;
             let high = bus.read((zp_addr.wrapping_add(1)) as u16) as u16;
 
-            let target = ((high << 8) | low).wrapping_add(cpu.y_register.0 as u16);
+            let target = ((high << 8) | low).wrapping_add(cpu.y_register as u16);
             ResolvedOperand { operand: Operand::Address(target), page_crossed: false }
         },
     }
@@ -963,7 +1072,7 @@ enum Mnemomic{
     WAI,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 enum Operand{
     Implied,
     Accumulator,
@@ -976,14 +1085,14 @@ impl Operand{
         match self{
             Operand::Value(v) => Ok(v),
             Operand::Address(a) => Ok(bus.read(a)),
-            Operand::Accumulator => Ok(cpu.a_register.0),
+            Operand::Accumulator => Ok(cpu.a_register),
             _ => Err(CpuError::InvalidOperand(self))
         }
     }
     fn write(self, cpu: &mut W65C02S, bus: &mut dyn Bus, val: u8) -> Result<(), CpuError>{
         match self{
             Operand::Address(a) => { bus.write(a, val); Ok(()) },
-            Operand::Accumulator => { cpu.a_register.0 = val; Ok(())},
+            Operand::Accumulator => { cpu.a_register = val; Ok(())},
             _ => Err(CpuError::InvalidOperand(self))
         }
     }
