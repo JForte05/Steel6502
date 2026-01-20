@@ -46,6 +46,10 @@ impl MemoryPage{
     pub fn write_unchecked(&mut self, idx: u8, val: u8){
         self.buffer[idx as usize] = val;
     }
+
+    pub fn contents(&self) -> &[u8]{
+        &self.buffer
+    }
 }
 impl Indexed for MemoryPage{
     fn len(&self) -> usize {
@@ -83,7 +87,7 @@ pub struct RAMSegment{
     size_bytes: usize
 }
 impl RAMSegment{
-    fn new(num_pages: usize) -> Self{
+    pub fn new(num_pages: usize) -> Self{
         Self { 
             pages: (0..num_pages).map(|_| MemoryPage::new()).collect(), 
             size_bytes: MemoryPage::SIZE * num_pages 
@@ -103,6 +107,38 @@ impl RAMSegment{
         }
 
         Ok(idx_result)
+    }
+
+    pub fn read_page_offset(&mut self, page: usize, offset: u8) -> u8{
+        self.pages[page].read_unchecked(offset)
+    }
+    pub fn peek_page_offset(&self, page: usize, offset: u8) -> u8{
+        self.pages[page].peek_unchecked(offset)
+    }
+
+    pub fn write_page_offset(&mut self, page: usize, offset: u8, val: u8) {
+        self.pages[page].write_unchecked(offset, val);
+    }
+
+    pub fn load(&mut self, bytes: &[u8]) {
+        let mut i = 0usize;
+        for byte in bytes{
+            if i > self.size_bytes {break;}
+
+            let page = i >> 8;
+            let offset = (i & 0xff) as u8;
+            self.pages[page].write_unchecked(offset, *byte);
+            i += 1;
+        }
+    }
+    pub fn contents(&self) -> Box<[u8]>{
+        let mut contents: Vec<u8> = Vec::new();
+
+        for page in self.pages.iter(){
+            contents.extend_from_slice(page.contents());
+        }
+
+        contents.into_boxed_slice()
     }
 }
 impl Indexed for RAMSegment{
@@ -136,7 +172,7 @@ pub struct ROMSegment{
     size_bytes: usize
 }
 impl ROMSegment{
-    fn new(num_pages: usize) -> Self{
+    pub fn new(num_pages: usize) -> Self{
         Self { 
             pages: (0..num_pages).map(|_| MemoryPage::new()).collect(), 
             size_bytes: MemoryPage::SIZE * num_pages 
@@ -156,6 +192,29 @@ impl ROMSegment{
         }
 
         Ok(idx_result)
+    }
+
+    pub fn load(&mut self, bytes: &[u8]) -> Result<(), AccessError>{
+        if bytes.len() > self.size_bytes{
+            return Err(AccessError::OutOfRange(self.size_bytes));
+        }
+
+        let mut i = 0usize;
+        for byte in bytes{
+            let page = i >> 8;
+            let offset = (i & 0xff) as u8;
+            self.pages[page].write_unchecked(offset, *byte);
+            i += 1;
+        }
+
+        Ok(())
+    }
+
+    pub fn read_page_offset(&mut self, page: usize, offset: u8) -> u8{
+        self.pages[page].read_unchecked(offset)
+    }
+    pub fn peek_page_offset(&self, page: usize, offset: u8) -> u8{
+        self.pages[page].peek_unchecked(offset)
     }
 }
 impl Indexed for ROMSegment{
