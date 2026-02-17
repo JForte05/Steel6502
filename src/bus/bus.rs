@@ -1,14 +1,5 @@
 use crate::memory::memory::{Indexed, RAMSegment, ROMSegment};
 
-pub enum BusError{
-    UnmappedAddress(u16),
-    UnsupportedOperation{ attempted_address: u16, attempted_operation: BusOperation}
-}
-pub enum BusOperation{
-    Read,
-    Write
-}
-
 pub trait Bus{
     fn read(&mut self, address: u16) -> u8;
     fn write(&mut self, address: u16, val: u8);
